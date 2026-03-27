@@ -1,4 +1,3 @@
-
 const express = require("express");
 const axios = require("axios");
 
@@ -34,7 +33,7 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
-// Función para enviar mensaje
+// Función para enviar mensaje de texto
 async function sendWhatsAppMessage(to, message) {
   const url = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`;
 
@@ -70,6 +69,67 @@ async function sendWhatsAppMessage(to, message) {
     } else {
       console.error(error.message);
     }
+    throw error;
+  }
+}
+
+// Función para enviar botones interactivos
+async function sendWhatsAppButtons(to, bodyText, button1Id, button1Title, button2Id, button2Title) {
+  const url = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`;
+
+  const data = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to,
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: {
+        text: bodyText
+      },
+      action: {
+        buttons: [
+          {
+            type: "reply",
+            reply: {
+              id: button1Id,
+              title: button1Title
+            }
+          },
+          {
+            type: "reply",
+            reply: {
+              id: button2Id,
+              title: button2Title
+            }
+          }
+        ]
+      }
+    }
+  };
+
+  console.log("📤 Enviando botones a:", to);
+  console.log("📤 Payload botones:", JSON.stringify(data, null, 2));
+
+  try {
+    const response = await axios.post(url, data, {
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+        "Content-Type": "application/json"
+      }
+    });
+
+    console.log("✅ Botones enviados:", JSON.stringify(response.data, null, 2));
+    return response.data;
+  } catch (error) {
+    console.error("❌ Error enviando botones:");
+    if (error.response) {
+      console.error("Status:", error.response.status);
+      console.error("Data:", JSON.stringify(error.response.data, null, 2));
+    } else {
+      console.error(error.message);
+    }
+    throw error;
   }
 }
 
@@ -97,6 +157,32 @@ app.post("/webhook", async (req, res) => {
     console.log("👤 Número remitente:", from);
     console.log("🧩 Tipo de mensaje:", type);
 
+    // Manejo de botones
+    if (type === "interactive") {
+      const buttonReply = message.interactive?.button_reply;
+      const buttonId = buttonReply?.id;
+      const buttonTitle = buttonReply?.title;
+
+      console.log("🔘 Botón presionado:", buttonId, buttonTitle);
+
+      if (buttonId?.startsWith("confirmar_nombre|")) {
+        const nombre = buttonId.split("|")[1] || "";
+        await sendWhatsAppMessage(from, `Perfecto ✅, nombre confirmado: ${nombre}`);
+        console.log("✅ Nombre confirmado");
+        return;
+      }
+
+      if (buttonId === "rechazar_nombre") {
+        await sendWhatsAppMessage(from, "Está bien. Escribe tu nombre nuevamente.");
+        console.log("✅ Se pidió el nombre nuevamente");
+        return;
+      }
+
+      await sendWhatsAppMessage(from, "No entendí la opción seleccionada.");
+      return;
+    }
+
+    // Manejo de texto
     if (type !== "text") {
       console.log("ℹ️ Tipo no manejado:", type);
       await sendWhatsAppMessage(from, "Por ahora solo puedo responder mensajes de texto.");
@@ -108,24 +194,48 @@ app.post("/webhook", async (req, res) => {
 
     console.log("💬 Texto recibido:", userText);
 
-    let reply = "No entendí tu mensaje.";
-
+    // Flujo inicial
     if (text === "hola") {
-      reply = "Hola 👋 soy tu bot de WhatsApp.";
-    } else if (text === "menu" || text === "menú") {
-      reply = "Opciones:\n1. horario\n2. soporte\n3. estado";
-    } else if (text === "1" || text === "horario") {
-      reply = "Atendemos de lunes a viernes de 8:00 a.m. a 5:00 p.m.";
-    } else if (text === "2" || text === "soporte") {
-      reply = "Con gusto te ayudamos. Escribe tu consulta y te respondemos.";
-    } else if (text === "3" || text === "estado") {
-      reply = "El sistema está funcionando correctamente ✅";
-    } else {
-      reply = `Recibí tu mensaje: ${userText}`;
+      await sendWhatsAppMessage(from, "Hola 👋 Bienvenido. Por favor, escribe tu nombre.");
+      console.log("✅ Se solicitó el nombre");
+      return;
     }
 
-    await sendWhatsAppMessage(from, reply);
-    console.log("✅ Respuesta enviada al usuario");
+    if (text === "menu" || text === "menú") {
+      await sendWhatsAppMessage(from, "Por favor, escribe tu nombre para continuar.");
+      console.log("✅ Menú inicial enviado");
+      return;
+    }
+
+    if (text === "1" || text === "horario") {
+      await sendWhatsAppMessage(from, "Atendemos de lunes a viernes de 8:00 a.m. a 5:00 p.m.");
+      console.log("✅ Horario enviado");
+      return;
+    }
+
+    if (text === "2" || text === "soporte") {
+      await sendWhatsAppMessage(from, "Con gusto te ayudamos. Primero escribe tu nombre.");
+      console.log("✅ Soporte enviado");
+      return;
+    }
+
+    if (text === "3" || text === "estado") {
+      await sendWhatsAppMessage(from, "El sistema está funcionando correctamente ✅");
+      console.log("✅ Estado enviado");
+      return;
+    }
+
+    // Cualquier otro texto se toma como nombre y se pide confirmación
+    await sendWhatsAppButtons(
+      from,
+      `Tu nombre es *${userText}*. ¿Deseas confirmarlo?`,
+      `confirmar_nombre|${userText}`,
+      "Sí",
+      "rechazar_nombre",
+      "No"
+    );
+
+    console.log("✅ Se enviaron botones de confirmación");
 
   } catch (error) {
     console.error("❌ Error procesando webhook:");
